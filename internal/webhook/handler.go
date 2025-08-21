@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
