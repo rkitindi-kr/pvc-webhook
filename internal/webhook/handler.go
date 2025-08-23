@@ -44,8 +44,8 @@ func init() {
 func NewHandler(log logr.Logger) http.Handler {
 	h := &Handler{
 		log:           log,
-		defaultSize:   getEnv("DEFAULT_SIZE", "10Gi"),
-        defaultSC:     getEnv("DEFAULT_STORAGE_CLASS", "standard"),
+		defaultSize:   getEnv("DEFAULT_SIZE", "2Gi"),
+        defaultSC:     getEnv("DEFAULT_STORAGE_CLASS", "robin-repl-3"),
         defaultAccess: getEnv("DEFAULT_ACCESS_MODES", "ReadWriteOnce"),
 	}
 	return h
