@@ -1,31 +1,30 @@
 # ----------- Build Stage -----------
-FROM golang:1.22 AS builder
+FROM golang:1.24.0 AS builder
 
-# Enable Go modules and set working directory
-WORKDIR /controller
+WORKDIR /workspace
 
-# Cache go.mod and go.sum first (faster builds)
+# Cache dependencies first
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the code
+# Copy source
 COPY . .
 
-# Build the binary
-# For webhook use:   go build -o webhook main.go
-# For controller use: go build -o controller controller.go
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o controller oneagent-controller.go
+# Build the controller binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -o controller ./oneagent-controller.go
 
 # ----------- Runtime Stage -----------
-FROM gcr.io/distroless/base-debian12
+FROM gcr.io/distroless/base-debian12:nonroot
 
 WORKDIR /
 
-# Copy binary from builder
-COPY --from=builder /controller/controller /controller
+# Copy binary into PATH
+COPY --from=builder /workspace/controller /usr/local/bin/controller
 
-# TLS certs will be mounted as secrets in /tls
+# Ensure TLS certs are available (for Kubernetes API calls)
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
 USER nonroot:nonroot
 
-ENTRYPOINT ["/controller"]
+ENTRYPOINT ["controller"]
 
