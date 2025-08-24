@@ -76,12 +76,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
             AccessModes: []corev1.PersistentVolumeAccessMode{
                 corev1.ReadWriteOnce,
             },
-            /* Resources: corev1.ResourceRequirements{
-                Requests: corev1.ResourceList{
-                    corev1.ResourceStorage: size,
-                },
-            }, */
-	    Resources: corev1.VolumeResourceRequirements{
+            Resources: corev1.VolumeResourceRequirements{
                 Requests: corev1.ResourceList{
                     corev1.ResourceStorage: size,
                 },
