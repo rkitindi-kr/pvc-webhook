@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -24,8 +25,8 @@ type Handler struct {
 func NewHandler(client *kubernetes.Clientset, defaultSize, defaultClass string) *Handler {
 	return &Handler{
 		client:       client,
-		defaultSize:  2GB,
-		defaultClass: robin-repl-3,
+		defaultSize:  "2Gi",
+		defaultClass: "robin-repl-3",
 	}
 }
 
