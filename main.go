@@ -1,134 +1,45 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"io/ioutil"
-	"net/http"
-	"strings"
+    "flag"
+    "os"
 
-	admv1 "k8s.io/api/admission/v1"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
+    ctrl "sigs.k8s.io/controller-runtime"
+    "sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+    "github.com/rkitindi-kr/pvc-webhook/controllers" // adjust module path
 )
-
-var (
-	scheme       = runtime.NewScheme()
-	codecs       = serializer.NewCodecFactory(scheme)
-	deserializer = codecs.UniversalDeserializer()
-)
-
-// 🔹 Helper function to escape JSON pointer keys
-func escapeJSONPointer(s string) string {
-	s = strings.ReplaceAll(s, "~", "~0")
-	s = strings.ReplaceAll(s, "/", "~1")
-	return s
-}
-
-// Handle incoming admission review requests
-func mutatePods(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "unable to read body", http.StatusBadRequest)
-		return
-	}
-
-	var admissionReview admv1.AdmissionReview
-	if _, _, err := deserializer.Decode(body, nil, &admissionReview); err != nil {
-		http.Error(w, "unable to decode body", http.StatusBadRequest)
-		return
-	}
-
-	req := admissionReview.Request
-	if req.Kind.Kind != "Pod" {
-		writeResponse(w, admissionReview, nil)
-		return
-	}
-
-	// Decode Pod
-	var pod corev1.Pod
-	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		http.Error(w, "could not unmarshal pod", http.StatusBadRequest)
-		return
-	}
-
-	patches := []map[string]interface{}{}
-
-	// Mutate each volume if it's emptyDir
-	for i, vol := range pod.Spec.Volumes {
-		if vol.EmptyDir != nil {
-			// PVC name convention
-			pvcName := fmt.Sprintf("pvc-%s-%s", pod.Name, vol.Name)
-
-			// Replace emptyDir with PVC
-			patch := map[string]interface{}{
-				"op":    "replace",
-				"path":  fmt.Sprintf("/spec/volumes/%d", i),
-				"value": map[string]interface{}{
-					"name": vol.Name,
-					"persistentVolumeClaim": map[string]interface{}{
-						"claimName": pvcName,
-					},
-				},
-			}
-			patches = append(patches, patch)
-
-			// Add annotation so controller knows to create this PVC
-			annPath := "/metadata/annotations"
-			if pod.Annotations == nil || len(pod.Annotations) == 0 {
-				// If no annotations exist, add the whole map
-				patchAdd := map[string]interface{}{
-					"op":   "add",
-					"path": annPath,
-					"value": map[string]string{
-						"pvc-webhook/" + vol.Name: pvcName,
-					},
-				}
-				patches = append(patches, patchAdd)
-				pod.Annotations = map[string]string{} // prevent duplicate "add"
-			} else {
-				// Add a single key under existing annotations
-				patchAnn := map[string]interface{}{
-					"op":    "add",
-					"path":  fmt.Sprintf("%s/%s", annPath, escapeJSONPointer("pvc-webhook/"+vol.Name)),
-					"value": pvcName,
-				}
-				patches = append(patches, patchAnn)
-			}
-		}
-	}
-
-	patchBytes, _ := json.Marshal(patches)
-	writeResponse(w, admissionReview, patchBytes)
-}
-
-// Write AdmissionReview response back to API server
-func writeResponse(w http.ResponseWriter, ar admv1.AdmissionReview, patch []byte) {
-	review := admv1.AdmissionReview{
-		TypeMeta: ar.TypeMeta,
-		Response: &admv1.AdmissionResponse{
-			UID:     ar.Request.UID,
-			Allowed: true,
-		},
-	}
-	if patch != nil {
-		pt := admv1.PatchTypeJSONPatch
-		review.Response.PatchType = &pt
-		review.Response.Patch = patch
-	}
-
-	resp, _ := json.Marshal(review)
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(resp)
-}
 
 func main() {
-	http.HandleFunc("/mutate", mutatePods)
-	// TLS certs should be mounted at /tls/tls.crt and /tls/tls.key
-	fmt.Println("Starting webhook server on :8443 ...")
-	if err := http.ListenAndServeTLS(":8443", "/tls/tls.crt", "/tls/tls.key", nil); err != nil {
-		panic(err)
-	}
+    var metricsAddr string
+    var enableLeaderElection bool
+
+    flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
+    flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
+    flag.Parse()
+
+    opts := zap.Options{}
+    logger := zap.New(zap.UseFlagOptions(&opts))
+    ctrl.SetLogger(logger)
+
+    mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+        MetricsBindAddress: metricsAddr,
+        LeaderElection:     enableLeaderElection,
+        LeaderElectionID:   "pvc-webhook-controller",
+    })
+    if err != nil {
+        os.Exit(1)
+    }
+
+    if err = (&controllers.PersistentVolumeClaimReconciler{
+        Client: mgr.GetClient(),
+        Scheme: mgr.GetScheme(),
+    }).SetupWithManager(mgr); err != nil {
+        os.Exit(1)
+    }
+
+    if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+        os.Exit(1)
+    }
 }
 

@@ -1,3 +1,23 @@
+package controllers
+
+import (
+    "context"
+
+    corev1 "k8s.io/api/core/v1"
+    "k8s.io/apimachinery/pkg/api/errors"
+    "k8s.io/apimachinery/pkg/api/resource"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    ctrl "sigs.k8s.io/controller-runtime"
+    "sigs.k8s.io/controller-runtime/pkg/client"
+    "sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+type PVCReconciler struct {
+    client.Client
+    DefaultSize  string
+    DefaultClass string
+}
+
 func (r *PVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
     logger := log.FromContext(ctx)
 
@@ -47,7 +67,8 @@ func (r *PVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
     var pvc corev1.PersistentVolumeClaim
     err = r.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: claimName}, &pvc)
     if err == nil {
-        return ctrl.Result{}, nil // PVC already exists
+	logger.Info("PVC already exists for Pod", "pvc", claimName, "pod", pod.Name)
+	return ctrl.Result{}, nil
     }
     if !errors.IsNotFound(err) {
         return ctrl.Result{}, err
@@ -57,6 +78,9 @@ func (r *PVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
         ObjectMeta: metav1.ObjectMeta{
             Name:      claimName,
             Namespace: pod.Namespace,
+	    OwnerReferences: []metav1.OwnerReference{
+                 *metav1.NewControllerRef(&pod, corev1.SchemeGroupVersion.WithKind("Pod")),
+            },
         },
         Spec: corev1.PersistentVolumeClaimSpec{
             AccessModes: []corev1.PersistentVolumeAccessMode{
@@ -67,9 +91,11 @@ func (r *PVCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
                     corev1.ResourceStorage: size,
                 },
             },
-            StorageClassName: &className,
         },
     }
+
+    sc := className
+    pvc.Spec.StorageClassName = &sc
 
     if err := r.Create(ctx, &pvc); err != nil {
         return ctrl.Result{}, err
