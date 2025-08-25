@@ -6,7 +6,6 @@ import (
     corev1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/errors"
     "k8s.io/apimachinery/pkg/api/resource"
-    "k8s.io/apimachinery/pkg/runtime"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     ctrl "sigs.k8s.io/controller-runtime"
     "sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,7 +15,6 @@ import (
 // PersistentVolumeClaimReconciler ensures PVCs exist for Pods annotated by the webhook
 type PersistentVolumeClaimReconciler struct {
     client.Client
-    Scheme *runtime.Scheme
 }
 
 // Reconcile runs when Pods are created/updated/deleted
@@ -26,7 +24,10 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
     var pod corev1.Pod
     if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
         if errors.IsNotFound(err) {
-            // Pod deleted → nothing to do here
+            // Pod deleted → also delete PVC if one was linked
+            // Construct PVC name from claim annotation (same namespace)
+            // Note: if Pod object already gone, we can’t read annotations directly
+            // Instead, you might rely on deterministic naming convention
             return ctrl.Result{}, nil
         }
         return ctrl.Result{}, err
