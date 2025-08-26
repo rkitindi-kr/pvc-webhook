@@ -10,9 +10,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -20,7 +20,7 @@ import (
 type PersistentVolumeClaimReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder event.Recorder
+	Recorder record.EventRecorder
 }
 
 // Reconcile ensures annotated Pods always have a PVC
@@ -110,13 +110,11 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
 
 	logger.Info("Created PVC for Pod", "pvc", claimName, "pod", pod.Name)
 
-	// Emit event (new API v0.21+)
-	r.Recorder.Publish(event.GenericEvent{
-		Object:    &pod,
-		EventType: corev1.EventTypeNormal,
-		Reason:    "PVCProvisioned",
-		Message:   fmt.Sprintf("Created PVC %s for pod %s", claimName, pod.Name),
-	})
+	// Emit event via client-go EventRecorder
+	if r.Recorder != nil {
+		r.Recorder.Eventf(&pod, corev1.EventTypeNormal, "PVCProvisioned",
+			"Created PVC %s for Pod %s", claimName, pod.Name)
+	}
 
 	// Requeue to check binding status
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
@@ -124,6 +122,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
 
 // SetupWithManager registers this reconciler with the controller-runtime manager
 func (r *PersistentVolumeClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.Recorder = mgr.GetEventRecorderFor("pvc-webhook")
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1.Pod{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
