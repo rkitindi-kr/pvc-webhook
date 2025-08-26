@@ -2,8 +2,6 @@ package controllers
 
 import (
     "context"
-    "fmt"
-    "time"
 
     corev1 "k8s.io/api/core/v1"
     "k8s.io/apimachinery/pkg/api/errors"
@@ -13,14 +11,12 @@ import (
     ctrl "sigs.k8s.io/controller-runtime"
     "sigs.k8s.io/controller-runtime/pkg/client"
     "sigs.k8s.io/controller-runtime/pkg/log"
-    "sigs.k8s.io/controller-runtime/pkg/record"
 )
 
 // PersistentVolumeClaimReconciler ensures PVCs exist for Pods annotated by the webhook
 type PersistentVolumeClaimReconciler struct {
     client.Client
-    Scheme   *runtime.Scheme
-    Recorder record.EventRecorder
+    Scheme *runtime.Scheme
 }
 
 // Reconcile runs when Pods are created/updated/deleted
@@ -30,8 +26,8 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
     var pod corev1.Pod
     if err := r.Get(ctx, req.NamespacedName, &pod); err != nil {
         if errors.IsNotFound(err) {
-            // Pod deleted → cleanup PVC
-            return r.cleanupPVC(ctx, req.Namespace, req.Name, logger)
+            // Pod deleted → nothing to do here
+            return ctrl.Result{}, nil
         }
         return ctrl.Result{}, err
     }
@@ -53,31 +49,14 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
     var pvc corev1.PersistentVolumeClaim
     err := r.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: claimName}, &pvc)
     if err == nil {
-        // PVC already exists — check status
-        switch pvc.Status.Phase {
-        case corev1.ClaimBound:
-            logger.Info("PVC already bound", "pvc", claimName, "pod", pod.Name)
-            return ctrl.Result{}, nil
-        case corev1.ClaimPending:
-            logger.Info("PVC exists but not yet bound", "pvc", claimName, "pod", pod.Name)
-            // Requeue until bound
-            return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-        default:
-            logger.Info("PVC in unexpected phase", "pvc", claimName, "phase", pvc.Status.Phase)
-            return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-        }
+        logger.Info("PVC already exists", "pvc", claimName, "pod", pod.Name)
+        return ctrl.Result{}, nil
     }
     if !errors.IsNotFound(err) {
         return ctrl.Result{}, err
     }
 
     // PVC does not exist → create it
-    qty, parseErr := resource.ParseQuantity(storageSize)
-    if parseErr != nil {
-        logger.Error(parseErr, "Invalid storage-size annotation, defaulting to 2Gi")
-        qty = resource.MustParse("2Gi")
-    }
-
     pvc = corev1.PersistentVolumeClaim{
         ObjectMeta: metav1.ObjectMeta{
             Name:      claimName,
@@ -96,7 +75,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
             },
             Resources: corev1.VolumeResourceRequirements{
                 Requests: corev1.ResourceList{
-                    corev1.ResourceStorage: qty,
+                    corev1.ResourceStorage: resource.MustParse(storageSize),
                 },
             },
         },
@@ -111,33 +90,6 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(ctx context.Context, req ctr
     }
 
     logger.Info("Created PVC for Pod", "pvc", claimName, "pod", pod.Name)
-    r.Recorder.Eventf(&pod, corev1.EventTypeNormal, "PVCProvisioned", "Created PVC %s for pod %s", claimName, pod.Name)
-
-    // Requeue to check binding status
-    return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-}
-
-// cleanupPVC deletes the PVC when the pod is gone
-func (r *PersistentVolumeClaimReconciler) cleanupPVC(ctx context.Context, namespace, podName string, logger logr.Logger) (ctrl.Result, error) {
-    // PVCs are named after pod via webhook logic: "bin-volume-<podName>"
-    claimName := fmt.Sprintf("bin-volume-%s", podName)
-
-    var pvc corev1.PersistentVolumeClaim
-    err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: claimName}, &pvc)
-    if errors.IsNotFound(err) {
-        // PVC already gone → nothing to do
-        return ctrl.Result{}, nil
-    }
-    if err != nil {
-        return ctrl.Result{}, err
-    }
-
-    // Explicitly delete PVC
-    if err := r.Delete(ctx, &pvc); err != nil && !errors.IsNotFound(err) {
-        return ctrl.Result{}, err
-    }
-
-    logger.Info("Deleted PVC after Pod removal", "pvc", claimName, "namespace", namespace)
     return ctrl.Result{}, nil
 }
 
